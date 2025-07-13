@@ -1,2 +1,9 @@
 pybaseball
 scipy
+requests
+polars
+numpy
+tqdm
+pytz
+python-mlb-statsapi
+matplotlib
