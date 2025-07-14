@@ -18,6 +18,8 @@ from utils import (
 )
 from opticodds import get_fixture_id, fetch_odds
 from collections import Counter
+import csv
+import pprint
 
 # Turn off pymc logging
 logging.getLogger("pymc").setLevel(logging.WARNING)
@@ -297,11 +299,177 @@ def predict_strikeout_under_probability(
     return prob_under, odds, coef_samples_dict
 
 
+def backtest_model_for_player(player: dict, df: pd.DataFrame):
+    print(
+        f"Backtesting the model for {player['name_first'][0]} {player['name_last'][0]}"
+    )
+
+    lines = ["closing", "opening"]
+    bets = {"closing": [], "opening": []}
+
+    # 1. Iterate over each game in the data frame df
+    for index, row in df.iterrows():
+        fixture_id = get_fixture_id(
+            row["date"], f"{player['name_first'][0]} {player['name_last'][0]}"
+        )
+        print(f"\nFixture ID: {fixture_id} on {row['date']}")
+        # 2. For each game, fetch the Optic Odds `fixture` for the game using https://developer.opticodds.com/reference/get_fixtures
+        # Use the following sportsbooks:
+        # - DraftKings
+        # - FanDuel
+        # - BetMGM
+        # - ESPN Bet
+        # - Caesars
+        odds = fetch_odds(
+            fixture_id, f"{player['name_first'][0]} {player['name_last'][0]}"
+        )
+        for line in lines:
+            # 3. Determine the best closing line 'points' for the 'player strikeouts' over/under market
+            # Extract all 'points' values from the odds object
+            points_list = [
+                odds[line][book]["over_points"]
+                for book in odds[line].keys()
+                if odds[line][book].get("over_points") is not None
+            ]
+
+            # Count the frequency of each points value
+            points_counter = Counter(points_list)
+
+            # Get the most common points value
+            if points_counter:
+                best_closing_line_points = points_counter.most_common(1)[0][0]
+            else:
+                best_closing_line_points = None
+
+            if best_closing_line_points is None or best_closing_line_points == 0:
+                continue
+
+            # 4. Determine the best closing line 'price' for the over 'player strikeouts' market
+            # The best closing line 'price' is the greatest 'over_price' value across all odds entries
+            # that have a 'points' value equal to the best_closing_line_points
+            best_closing_line_over_price = max(
+                [
+                    odds[line][book]["over_price"]
+                    for book in odds[line].keys()
+                    if odds[line][book]["over_points"] == best_closing_line_points
+                ]
+            )
+            best_over_book = [
+                book
+                for book in odds[line].keys()
+                if odds[line][book]["over_points"] == best_closing_line_points
+                and odds[line][book]["over_price"] == best_closing_line_over_price
+            ][0]
+            # 5. Determine the best closing line 'price' for the under 'player strikeouts' market
+            # The best closing line 'price' is the greatest 'under_price' value across all odds entries
+            # that have a 'points' value equal to the best_closing_line_points
+            best_closing_line_under_price = max(
+                [
+                    odds[line][book]["under_price"]
+                    for book in odds[line].keys()
+                    if odds[line][book]["under_points"] == best_closing_line_points
+                ]
+            )
+            best_under_book = [
+                book
+                for book in odds[line].keys()
+                if odds[line][book]["under_points"] == best_closing_line_points
+                and odds[line][book]["under_price"] == best_closing_line_under_price
+            ][0]
+
+            print(
+                f"Best {line} line over price: {best_closing_line_over_price} at {best_over_book}"
+            )
+            print(
+                f"Best {line} line under price: {best_closing_line_under_price} at {best_under_book}"
+            )
+
+            # 6. Create a DataFrame with the required columns for prediction using only rows where the 'date' is before the current game's date
+            data_for_prediction = df[
+                ["strikeouts", "baseonballs", "hits", "inningspitched", "date"]
+            ].copy()
+            data_for_prediction = data_for_prediction[
+                data_for_prediction["date"] < row["date"]
+            ]
+            # Remove the 'date' column
+            data_for_prediction = data_for_prediction.drop(columns=["date"])
+
+            # Check for an empty data frame
+            if data_for_prediction.empty:
+                continue
+
+            # 6. Run the model to predict the probability of the given pitcher pitching more than the best closing line 'points'
+            prob_over, odds_over, coef_samples_dict_over = (
+                predict_strikeout_over_probability(
+                    data_for_prediction,
+                    best_closing_line_points,
+                    show_plots=False,
+                )
+            )
+
+            # 7. Run the model to predict the probability of the given pitcher pitching less than the best closing line 'points'
+            prob_under, odds_under, coef_samples_dict_under = (
+                predict_strikeout_under_probability(
+                    data_for_prediction,
+                    best_closing_line_points,
+                    show_plots=False,
+                )
+            )
+
+            # 8. Compare the over model prediction with the under model prediction and select which one has a higher probability
+            # 9. Bet the over or under market based on the selected prediction for 1u.
+            price = (
+                best_closing_line_over_price
+                if prob_over > prob_under
+                else best_closing_line_under_price
+            )
+            amount = 100
+            # Calculate win_amount based on American odds
+            if price > 0:
+                win_amount = amount * (price / 100)
+            else:
+                win_amount = amount * (100 / abs(price))
+            bets[line].append(
+                {
+                    "date": row["date"],
+                    "fixture_id": fixture_id,
+                    "player": f"{player['name_first'][0]} {player['name_last'][0]}",
+                    "points": best_closing_line_points,
+                    "selection": "over" if prob_over > prob_under else "under",
+                    "price": price,
+                    "book": (
+                        best_over_book if prob_over > prob_under else best_under_book
+                    ),
+                    "prob": (
+                        float(f"{prob_over:.2f}")
+                        if prob_over > prob_under
+                        else float(f"{prob_under:.2f}")
+                    ),
+                    "amount": amount,
+                    "win_amount": win_amount,
+                    "result": None,
+                }
+            )
+            # 10. Grade the bet by inspecting the player's actual performance in the game.
+            # Find the row in the df where the 'date' is the same as the current game's date
+            game_row = df[df["date"] == row["date"]]
+            # Get the 'strikeouts' value for the current game
+            strikeouts = game_row["strikeouts"].values[0]
+            if strikeouts > best_closing_line_points:
+                bets[line][-1]["result"] = "win"
+            elif strikeouts == best_closing_line_points:
+                bets[line][-1]["result"] = "push"
+            else:
+                bets[line][-1]["result"] = "loss"
+
+    return bets
+
+
 def main():
     YEAR = 2025
     parser = argparse.ArgumentParser(description="Get pitching stats for a player")
-    parser.add_argument("first", help="First name of the player")
-    parser.add_argument("last", help="Last name of the player")
+    parser.add_argument("first", nargs="?", help="First name of the player")
+    parser.add_argument("last", nargs="?", help="Last name of the player")
     parser.add_argument(
         "--line", help="The current K/G line hung for the player", type=float
     )
@@ -310,18 +478,22 @@ def main():
     )
     parser.add_argument(
         "--backtest",
-        action="store_true",
-        help="Backtest the model",
-        default=False,
+        type=str,
+        help="Path to CSV file with player_first_name and player_last_name columns for backtesting",
+        default=None,
     )
 
     args = parser.parse_args()
 
-    player = find_player(args.first, args.last)
-
-    df = get_pitching_game_log_df(player["key_mlbam"][0], YEAR)
+    if not args.backtest and (not args.first or not args.last):
+        parser.error(
+            "the following arguments are required: first, last (unless --backtest is set)"
+        )
 
     if not args.backtest:
+        player = find_player(args.first, args.last)
+        df = get_pitching_game_log_df(player["key_mlbam"][0], YEAR)
+
         # Print the average strikeouts per game over the various trailing periods: season, 90 days, 60 days, 30 days, 14 days, 7 days
         print(
             f"Average strikeouts per game (season): {calculate_average_strikeouts_per_game(df)}"
@@ -369,200 +541,69 @@ def main():
         if args.show_plots:
             plot_strikeouts_per_game(df)
     else:
-        # Backtest the model
-        print(
-            f"Backtesting the model for {player['name_first'][0]} {player['name_last'][0]}"
-        )
+        all_bets = {
+            "closing": [],
+            "opening": [],
+        }
 
-        lines = ["closing", "opening"]
-        bets = {"closing": [], "opening": []}
+        # Read the CSV file of players to backtest
+        with open(args.backtest) as csv_file:
+            raw_players = [
+                {k: v for k, v in row.items()}
+                for row in csv.DictReader(csv_file, skipinitialspace=True)
+            ]
 
-        # 1. Iterate over each game in the data frame df
-        for index, row in df.iterrows():
-            fixture_id = get_fixture_id(
-                row["date"], f"{player['name_first'][0]} {player['name_last'][0]}"
+        for raw_player in raw_players:
+            player = find_player(
+                raw_player["player_first_name"], raw_player["player_last_name"]
             )
-            print(f"\nFixture ID: {fixture_id} on {row['date']}")
-            # 2. For each game, fetch the Optic Odds `fixture` for the game using https://developer.opticodds.com/reference/get_fixtures
-            # Use the following sportsbooks:
-            # - DraftKings
-            # - FanDuel
-            # - BetMGM
-            # - ESPN Bet
-            # - Caesars
-            odds = fetch_odds(
-                fixture_id, f"{player['name_first'][0]} {player['name_last'][0]}"
-            )
-            for line in lines:
-                # 3. Determine the best closing line 'points' for the 'player strikeouts' over/under market
-                # Extract all 'points' values from the odds object
-                points_list = [
-                    odds[line][book]["over_points"]
-                    for book in odds[line].keys()
-                    if odds[line][book].get("over_points") is not None
-                ]
+            df = get_pitching_game_log_df(player["key_mlbam"][0], YEAR)
 
-                # Count the frequency of each points value
-                points_counter = Counter(points_list)
+            bets = backtest_model_for_player(player, df)
+            all_bets["closing"].extend(bets["closing"])
+            all_bets["opening"].extend(bets["opening"])
 
-                # Get the most common points value
-                if points_counter:
-                    best_closing_line_points = points_counter.most_common(1)[0][0]
-                else:
-                    best_closing_line_points = None
-
-                if best_closing_line_points is None or best_closing_line_points == 0:
-                    continue
-
-                # 4. Determine the best closing line 'price' for the over 'player strikeouts' market
-                # The best closing line 'price' is the greatest 'over_price' value across all odds entries
-                # that have a 'points' value equal to the best_closing_line_points
-                best_closing_line_over_price = max(
-                    [
-                        odds[line][book]["over_price"]
-                        for book in odds[line].keys()
-                        if odds[line][book]["over_points"] == best_closing_line_points
-                    ]
-                )
-                best_over_book = [
-                    book
-                    for book in odds[line].keys()
-                    if odds[line][book]["over_points"] == best_closing_line_points
-                    and odds[line][book]["over_price"] == best_closing_line_over_price
-                ][0]
-                # 5. Determine the best closing line 'price' for the under 'player strikeouts' market
-                # The best closing line 'price' is the greatest 'under_price' value across all odds entries
-                # that have a 'points' value equal to the best_closing_line_points
-                best_closing_line_under_price = max(
-                    [
-                        odds[line][book]["under_price"]
-                        for book in odds[line].keys()
-                        if odds[line][book]["under_points"] == best_closing_line_points
-                    ]
-                )
-                best_under_book = [
-                    book
-                    for book in odds[line].keys()
-                    if odds[line][book]["under_points"] == best_closing_line_points
-                    and odds[line][book]["under_price"] == best_closing_line_under_price
-                ][0]
-
-                print(
-                    f"Best {line} line over price: {best_closing_line_over_price} at {best_over_book}"
-                )
-                print(
-                    f"Best {line} line under price: {best_closing_line_under_price} at {best_under_book}"
-                )
-
-                # 6. Create a DataFrame with the required columns for prediction using only rows where the 'date' is before the current game's date
-                data_for_prediction = df[
-                    ["strikeouts", "baseonballs", "hits", "inningspitched", "date"]
-                ].copy()
-                data_for_prediction = data_for_prediction[
-                    data_for_prediction["date"] < row["date"]
-                ]
-                # Remove the 'date' column
-                data_for_prediction = data_for_prediction.drop(columns=["date"])
-
-                # Check for an empty data frame
-                if data_for_prediction.empty:
-                    continue
-
-                # 6. Run the model to predict the probability of the given pitcher pitching more than the best closing line 'points'
-                prob_over, odds_over, coef_samples_dict_over = (
-                    predict_strikeout_over_probability(
-                        data_for_prediction, best_closing_line_points, show_plots=False
-                    )
-                )
-
-                # 7. Run the model to predict the probability of the given pitcher pitching less than the best closing line 'points'
-                prob_under, odds_under, coef_samples_dict_under = (
-                    predict_strikeout_under_probability(
-                        data_for_prediction, best_closing_line_points, show_plots=False
-                    )
-                )
-
-                # 8. Compare the over model prediction with the under model prediction and select which one has a higher probability
-                # 9. Bet the over or under market based on the selected prediction for 1u.
-                price = (
-                    best_closing_line_over_price
-                    if prob_over > prob_under
-                    else best_closing_line_under_price
-                )
-                amount = 100
-                # Calculate win_amount based on American odds
-                if price > 0:
-                    win_amount = amount * (price / 100)
-                else:
-                    win_amount = amount * (100 / abs(price))
-                bets[line].append(
-                    {
-                        "date": row["date"],
-                        "fixture_id": fixture_id,
-                        "player": f"{player['name_first'][0]} {player['name_last'][0]}",
-                        "points": best_closing_line_points,
-                        "selection": "over" if prob_over > prob_under else "under",
-                        "price": price,
-                        "book": (
-                            best_over_book
-                            if prob_over > prob_under
-                            else best_under_book
-                        ),
-                        "prob": (
-                            float(f"{prob_over:.2f}")
-                            if prob_over > prob_under
-                            else float(f"{prob_under:.2f}")
-                        ),
-                        "amount": amount,
-                        "win_amount": win_amount,
-                        "result": None,
-                    }
-                )
-                # 10. Grade the bet by inspecting the player's actual performance in the game.
-                # Find the row in the df where the 'date' is the same as the current game's date
-                game_row = df[df["date"] == row["date"]]
-                # Get the 'strikeouts' value for the current game
-                strikeouts = game_row["strikeouts"].values[0]
-                if strikeouts > best_closing_line_points:
-                    bets[line][-1]["result"] = "win"
-                elif strikeouts == best_closing_line_points:
-                    bets[line][-1]["result"] = "push"
-                else:
-                    bets[line][-1]["result"] = "loss"
-
-        for line in lines:
+        for line in all_bets.keys():
+            bets = all_bets[line]
             # 11. Evaluate the model's performance by calculating the following metrics:
             # Count the number of entries in the bets list where the 'result' is 'win'
-            wins = len([bet for bet in bets[line] if bet["result"] == "win"])
+            wins = len([bet for bet in bets if bet["result"] == "win"])
             # Count the number of entries in the bets list where the 'result' is 'loss'
-            losses = len([bet for bet in bets[line] if bet["result"] == "loss"])
+            losses = len([bet for bet in bets if bet["result"] == "loss"])
             # Count the number of entries in the bets list where the 'result' is 'push'
-            pushes = len([bet for bet in bets[line] if bet["result"] == "push"])
+            pushes = len([bet for bet in bets if bet["result"] == "push"])
             # Calculate the win rate
-            win_rate = (float(wins) / float(wins + losses)) * 100
+            win_rate = (
+                (float(wins) / float(wins + losses)) * 100
+                if (wins + losses) > 0
+                else 0.0
+            )
 
             # Calculate the total amount bet
-            total_amount_bet = sum([bet["amount"] for bet in bets[line]])
+            total_amount_bet = sum([bet["amount"] for bet in bets])
 
-            # Calculate the total profit (loss) by summing the 'win_amount' attributes of the bets where the 'result' is 'win' and subtracing the 'amount' attributes of the bets where the 'result' is 'loss'.
+            # Calculate the total profit (loss)
             total_profit_loss = sum(
-                [bet["win_amount"] for bet in bets[line] if bet["result"] == "win"]
-            ) - sum([bet["amount"] for bet in bets[line] if bet["result"] == "loss"])
+                [bet["win_amount"] for bet in bets if bet["result"] == "win"]
+            ) - sum([bet["amount"] for bet in bets if bet["result"] == "loss"])
 
             # Calculate the ROI
-            roi = (float(total_profit_loss) / float(total_amount_bet)) * 100
+            roi = (
+                (float(total_profit_loss) / float(total_amount_bet)) * 100
+                if total_amount_bet > 0
+                else 0.0
+            )
 
             # Calculate the Sharpe ratio
-            # Calculate per-bet returns
             returns = []
-            for bet in bets[line]:
+            for bet in bets:
                 if bet["result"] == "win":
                     returns.append(bet["win_amount"] / bet["amount"])
                 elif bet["result"] == "loss":
-                    returns.append(-1 * bet["amount"])
+                    returns.append(-1)
                 elif bet["result"] == "push":
                     returns.append(0)
-            risk_free_rate = 0  # You can set this to a small value if desired
+            risk_free_rate = 0
             if len(returns) > 1:
                 mean_return = np.mean(returns) - risk_free_rate
                 std_return = np.std(returns, ddof=1)
