@@ -557,6 +557,10 @@ def main():
             player = find_player(
                 raw_player["player_first_name"], raw_player["player_last_name"]
             )
+            # Skip this player if the "key_mlbam" is empty
+            if player["key_mlbam"] is None:
+                continue
+
             df = get_pitching_game_log_df(player["key_mlbam"][0], YEAR)
 
             bets = backtest_model_for_player(player, df)

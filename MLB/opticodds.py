@@ -25,8 +25,11 @@ def get_fixture_id(date: str, player_name: str) -> str:
     fixture_id = ""
     for fixture in response.json()["data"]:
         if (
-            player_name.lower() in fixture["home_starter"].lower()
-            or player_name.lower() in fixture["away_starter"].lower()
+            fixture["home_starter"] is not None
+            and player_name.lower() in fixture["home_starter"].lower()
+        ) or (
+            fixture["away_starter"] is not None
+            and player_name.lower() in fixture["away_starter"].lower()
         ):
             fixture_id = fixture["id"]
             break
