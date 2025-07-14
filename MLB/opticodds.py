@@ -56,14 +56,24 @@ def fetch_odds(fixture_id: str, player_name: str) -> dict:
 
     # Prepare return value for all books
     ret_val = {
-        book: {
+        "closing": {},
+        "opening": {},
+    }
+
+    for book in books:
+        ret_val["closing"][book] = {
             "over_points": 0,
             "over_price": 0,
             "under_points": 0,
             "under_price": 0,
         }
-        for book in books
-    }
+        ret_val["opening"][book] = {
+            "over_points": 0,
+            "over_price": 0,
+            "under_points": 0,
+            "under_price": 0,
+        }
+
     data = response.json().get("data", [])
     for fixture in data:
         for odds in fixture.get("odds", []):
@@ -75,12 +85,36 @@ def fetch_odds(fixture_id: str, player_name: str) -> dict:
                 if odds.get("selection_line") == "over":
                     clv = odds.get("clv", {})
                     if clv not in [None, {}]:
-                        ret_val[sportsbook]["over_points"] = clv.get("points", 0)
-                        ret_val[sportsbook]["over_price"] = clv.get("price", 0)
+                        ret_val["closing"][sportsbook]["over_points"] = clv.get(
+                            "points", 0
+                        )
+                        ret_val["closing"][sportsbook]["over_price"] = clv.get(
+                            "price", 0
+                        )
+                    olv = odds.get("olv", {})
+                    if olv not in [None, {}]:
+                        ret_val["opening"][sportsbook]["over_points"] = olv.get(
+                            "points", 0
+                        )
+                        ret_val["opening"][sportsbook]["over_price"] = olv.get(
+                            "price", 0
+                        )
                 elif odds.get("selection_line") == "under":
                     clv = odds.get("clv", {})
                     if clv not in [None, {}]:
-                        ret_val[sportsbook]["under_points"] = clv.get("points", 0)
-                        ret_val[sportsbook]["under_price"] = clv.get("price", 0)
+                        ret_val["closing"][sportsbook]["under_points"] = clv.get(
+                            "points", 0
+                        )
+                        ret_val["closing"][sportsbook]["under_price"] = clv.get(
+                            "price", 0
+                        )
+                    olv = odds.get("olv", {})
+                    if olv not in [None, {}]:
+                        ret_val["opening"][sportsbook]["under_points"] = olv.get(
+                            "points", 0
+                        )
+                        ret_val["opening"][sportsbook]["under_price"] = olv.get(
+                            "price", 0
+                        )
 
     return ret_val
