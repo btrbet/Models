@@ -374,11 +374,6 @@ def main():
             f"Backtesting the model for {player['name_first'][0]} {player['name_last'][0]}"
         )
 
-        """
-        TODO: This should accept a list of players and backtest them all to test a comprehensive application of the model.
-        TODO: This should handle pitchers with special characters in their name.
-        """
-
         lines = ["closing", "opening"]
         bets = {"closing": [], "opening": []}
 
@@ -504,6 +499,7 @@ def main():
                     {
                         "date": row["date"],
                         "fixture_id": fixture_id,
+                        "player": f"{player['name_first'][0]} {player['name_last'][0]}",
                         "points": best_closing_line_points,
                         "selection": "over" if prob_over > prob_under else "under",
                         "price": price,
