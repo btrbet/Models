@@ -386,7 +386,9 @@ def backtest_model_for_player(player: dict, df: pd.DataFrame):
 
             # 6. Create a DataFrame with the required columns for prediction using only rows where the 'date' is before the current game's date
             data_for_prediction = df[
-                ["strikeouts", "baseonballs", "hits", "inningspitched", "date"]
+                # "date" and "strikeouts" are required columns for the model
+                # All other columns are used as features in the GLM
+                ["date", "strikeouts", "baseonballs", "hits", "inningspitched"]
             ].copy()
             data_for_prediction = data_for_prediction[
                 data_for_prediction["date"] < row["date"]
