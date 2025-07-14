@@ -36,15 +36,17 @@ def get_fixture_id(date: str, player_name: str) -> str:
 
 def fetch_odds(fixture_id: str, player_name: str) -> dict:
     """
-    Fetch the odds for a given fixture ID.
+    Fetch the odds for a given fixture ID from multiple sportsbooks.
     """
     load_dotenv()
     api_key = os.environ.get("OPTICODDS_API_KEY")
 
-    # books = ["draftkings", "fanduel", "betmgm", "espn", "caesars"]
-    books = ["draftkings"]
+    books = ["draftkings", "fanduel", "betmgm", "caesars"]
 
-    url = f"https://api.opticodds.com/api/v3/fixtures/odds/historical?fixture_id={fixture_id}&market=player_strikeouts&sportsbook=draftkings&is_main=true"
+    url = f"https://api.opticodds.com/api/v3/fixtures/odds/historical?fixture_id={fixture_id}&market=player_strikeouts&is_main=true"
+    for book in books:
+        url += f"&sportsbook={book}"
+
     headers = {
         "accept": "application/json",
         "X-Api-Key": api_key,
@@ -52,32 +54,33 @@ def fetch_odds(fixture_id: str, player_name: str) -> dict:
 
     response = requests.get(url, headers=headers)
 
-    # Search through the ['data']['odds'] key in the response for the 'points' and 'price' of
-    # the 'clv' key where the value of the 'sportsbook' key is 'draftkings' and the value of the
-    # 'selection' key is the player_name
+    # Prepare return value for all books
     ret_val = {
-        "draftkings": {
+        book: {
             "over_points": 0,
             "over_price": 0,
             "under_points": 0,
             "under_price": 0,
         }
+        for book in books
     }
     data = response.json().get("data", [])
     for fixture in data:
         for odds in fixture.get("odds", []):
-            if odds.get("selection").lower() == player_name.lower():
-                # For both the selection_line=over and selection_line=under, get the 'points' and 'price' values of the 'clv' key
-                for selection_line in ["over", "under"]:
+            sportsbook = odds.get("sportsbook", "").lower()
+            if (
+                sportsbook in books
+                and odds.get("selection", "").lower() == player_name.lower()
+            ):
+                if odds.get("selection_line") == "over":
                     clv = odds.get("clv", {})
                     if clv not in [None, {}]:
-                        ret_val["draftkings"][f"{selection_line}_price"] = clv.get(
-                            "price", 0
-                        )
-                        ret_val["draftkings"][f"{selection_line}_points"] = clv.get(
-                            "points", 0
-                        )
-
-                return ret_val  # Return as soon as found
+                        ret_val[sportsbook]["over_points"] = clv.get("points", 0)
+                        ret_val[sportsbook]["over_price"] = clv.get("price", 0)
+                elif odds.get("selection_line") == "under":
+                    clv = odds.get("clv", {})
+                    if clv not in [None, {}]:
+                        ret_val[sportsbook]["under_points"] = clv.get("points", 0)
+                        ret_val[sportsbook]["under_price"] = clv.get("price", 0)
 
     return ret_val

@@ -17,6 +17,7 @@ from utils import (
     calculate_average_strikeouts_per_game,
 )
 from opticodds import get_fixture_id, fetch_odds
+from collections import Counter
 
 # Turn off pymc logging
 logging.getLogger("pymc").setLevel(logging.WARNING)
@@ -379,7 +380,8 @@ def main():
             fixture_id = get_fixture_id(
                 row["date"], f"{player['name_first'][0]} {player['name_last'][0]}"
             )
-
+            print("")
+            print(f"Fixture ID: {fixture_id} on {row['date']}")
             # 2. For each game, fetch the Optic Odds `fixture` for the game using https://developer.opticodds.com/reference/get_fixtures
             # Use the following sportsbooks:
             # - DraftKings
@@ -392,22 +394,64 @@ def main():
             )
 
             # 3. Determine the best closing line 'points' for the 'player strikeouts' over/under market
-            # The "best closing line" is the closing line that has the most often seen 'points' parameter.
-            if (
-                odds["draftkings"]["over_points"] == odds["draftkings"]["under_points"]
-            ) and (
-                odds["draftkings"]["over_points"] != 0
-                or odds["draftkings"]["under_points"] != 0
-            ):
-                best_closing_line_points = odds["draftkings"]["over_points"]
+            # Extract all 'points' values from the odds object
+            points_list = [
+                odds.get("over_points")
+                for odds in odds.values()
+                if odds.get("over_points") is not None
+            ]
+
+            # Count the frequency of each points value
+            points_counter = Counter(points_list)
+
+            # Get the most common points value
+            if points_counter:
+                best_closing_line_points = points_counter.most_common(1)[0][0]
             else:
+                best_closing_line_points = None
+
+            if best_closing_line_points is None or best_closing_line_points == 0:
                 continue
 
             # 4. Determine the best closing line 'price' for the over 'player strikeouts' market
-            best_closing_line_over_price = odds["draftkings"]["over_price"]
-
+            # The best closing line 'price' is the greatest 'over_price' value across all odds entries
+            # that have a 'points' value equal to the best_closing_line_points
+            best_closing_line_over_price = max(
+                [
+                    odds[book]["over_price"]
+                    for book in odds.keys()
+                    if odds[book]["over_points"] == best_closing_line_points
+                ]
+            )
+            best_over_book = [
+                book
+                for book in odds.keys()
+                if odds[book]["over_points"] == best_closing_line_points
+                and odds[book]["over_price"] == best_closing_line_over_price
+            ][0]
             # 5. Determine the best closing line 'price' for the under 'player strikeouts' market
-            best_closing_line_under_price = odds["draftkings"]["under_price"]
+            # The best closing line 'price' is the greatest 'under_price' value across all odds entries
+            # that have a 'points' value equal to the best_closing_line_points
+            best_closing_line_under_price = max(
+                [
+                    odds[book]["under_price"]
+                    for book in odds.keys()
+                    if odds[book]["under_points"] == best_closing_line_points
+                ]
+            )
+            best_under_book = [
+                book
+                for book in odds.keys()
+                if odds[book]["under_points"] == best_closing_line_points
+                and odds[book]["under_price"] == best_closing_line_under_price
+            ][0]
+
+            print(
+                f"Best closing line over price: {best_closing_line_over_price} at {best_over_book}"
+            )
+            print(
+                f"Best closing line under price: {best_closing_line_under_price} at {best_under_book}"
+            )
 
             # 6. Create a DataFrame with the required columns for prediction using only rows where the 'date' is before the current game's date
             data_for_prediction = df[
@@ -457,6 +501,9 @@ def main():
                     "points": best_closing_line_points,
                     "selection": "over" if prob_over > prob_under else "under",
                     "price": price,
+                    "book": (
+                        best_over_book if prob_over > prob_under else best_under_book
+                    ),
                     "prob": (
                         float(f"{prob_over:.2f}")
                         if prob_over > prob_under
