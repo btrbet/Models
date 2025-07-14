@@ -7,3 +7,6 @@ tqdm
 pytz
 python-mlb-statsapi
 matplotlib
+pymc
+arviz
+python-dotenv
