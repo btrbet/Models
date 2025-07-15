@@ -559,14 +559,15 @@ def main():
             player = find_player(
                 raw_player["player_first_name"], raw_player["player_last_name"]
             )
-            # Skip this player if the "key_mlbam" is empty
-            if player["key_mlbam"] is None:
-                continue
 
-            key = player["key_mlbam"]
-            if "key_mlbam" not in player or key is None:
+            try:
+                mlbam_key = player["key_mlbam"][0]
+                df = get_pitching_game_log_df(mlbam_key, YEAR)
+            except Exception as e:
+                print(
+                    f"Error getting game log for {raw_player['player_first_name']} {raw_player['player_last_name']}: {e}"
+                )
                 continue
-            df = get_pitching_game_log_df(key[0], YEAR)
 
             bets = backtest_model_for_player(player, df)
             all_bets["closing"].extend(bets["closing"])
