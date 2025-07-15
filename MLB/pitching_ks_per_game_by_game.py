@@ -564,11 +564,9 @@ def main():
                 continue
 
             key = player["key_mlbam"]
-            if hasattr(key, "iloc"):
-                key = key.iloc[0]
-            elif isinstance(key, (list, tuple)):
-                key = key[0]
-            df = get_pitching_game_log_df(key, YEAR)
+            if key is None:
+                continue
+            df = get_pitching_game_log_df(key[0], YEAR)
 
             bets = backtest_model_for_player(player, df)
             all_bets["closing"].extend(bets["closing"])
