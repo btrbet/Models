@@ -564,7 +564,7 @@ def main():
                 continue
 
             key = player["key_mlbam"]
-            if key is None:
+            if "key_mlbam" not in player or key is None:
                 continue
             df = get_pitching_game_log_df(key[0], YEAR)
 
