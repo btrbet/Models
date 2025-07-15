@@ -28,7 +28,7 @@ def convert_prob_to_american_odds(prob):
     Returns:
     - odds (int): The American odds.
     """
-    if prob > 0.5:
+    if prob > 0.5 and prob != 1.0:
         odds = -100.00 / (1 - prob) + 100.00
     elif prob != 0.0:
         odds = (100.00 / prob) - 100.00
